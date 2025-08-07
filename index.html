@@ -1,194 +1,89 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Lightning Countdown Timer</title>
-<style>
-  body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: #111;
-    color: #fff;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100vh;
-    margin: 0;
-    user-select: none;
-  }
-  #timer {
-    font-size: 12vw;
-    font-weight: 900;
-  }
-  #status {
-    margin-top: 1rem;
-    font-size: 5vw;
-    color: #f44336; /* red */
-    transition: color 0.3s;
-  }
-  #status.off {
-    color: #4caf50; /* green */
-  }
-  #error {
-    margin-top: 1rem;
-    color: #ff5722;
-    font-size: 4vw;
-  }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lightning Timer + Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    body { margin:0; font-family:sans-serif; background:#222; color:#fff; }
+    #map { height: 40vh; }
+    #timer { font-size: 8vw; text-align: center; margin: 0.5em 0; }
+    #status { font-size: 4vw; text-align: center; margin-bottom: 1em; }
+    .off { color: #4caf50; }
+    .on { color: #f44336; }
+  </style>
 </head>
 <body>
+  <div id="map"></div>
   <div id="timer">30:00</div>
   <div id="status" class="off">Lightning tracker and countdown</div>
-  <div id="error"></div>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    const clientId="YOUR_XWEATHER_CLIENT_ID", clientSecret="YOUR_XWEATHER_CLIENT_SECRET";
+    const radiusMiles=10, radiusKm=radiusMiles*1.60934;
+    let userLat,userLon, timerSec=1800, lightningActive=false;
+    const timerEl=document.getElementById("timer"), statusEl=document.getElementById("status");
+    const map=L.map('map').setView([0,0],13);
 
-<script>
-// --- Helper functions ---
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);
+    const userMarker=L.marker([0,0]).addTo(map);
+    const radiusCircle=L.circle([0,0],{radius:radiusKm*1000, color:'lightblue'}).addTo(map);
+    const strikesLayer=L.layerGroup().addTo(map);
 
-// Convert degrees to radians
-function toRadians(deg) {
-  return deg * Math.PI / 180;
-}
-
-// Calculate distance between two points in miles using Haversine formula
-function distanceMiles(lat1, lon1, lat2, lon2) {
-  const R = 3958.8; // Earth radius in miles
-  const dLat = toRadians(lat2 - lat1);
-  const dLon = toRadians(lon2 - lon1);
-  const a = Math.sin(dLat/2) ** 2 +
-            Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
-            Math.sin(dLon/2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
-// --- Variables ---
-const radiusMiles = 10;
-const countdownStartSeconds = 30 * 60; // 30 minutes
-let timerSeconds = countdownStartSeconds;
-let lightningActive = false;
-let countdownInterval;
-let checkInterval;
-let userLat = null;
-let userLon = null;
-
-const timerEl = document.getElementById('timer');
-const statusEl = document.getElementById('status');
-const errorEl = document.getElementById('error');
-
-// --- Update Timer Display ---
-function updateTimerDisplay() {
-  let m = Math.floor(timerSeconds / 60);
-  let s = timerSeconds % 60;
-  timerEl.textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
-
-  if (lightningActive && timerSeconds > 0) {
-    statusEl.textContent = "Sorry, we are on lightning";
-    statusEl.classList.remove('off');
-  } else {
-    statusEl.textContent = "Lightning tracker and countdown";
-    statusEl.classList.add('off');
-  }
-}
-
-// --- Countdown Timer ---
-function countdown() {
-  if (timerSeconds > 0) {
-    timerSeconds--;
-  } else {
-    lightningActive = false;
-  }
-  updateTimerDisplay();
-}
-
-// --- Check Lightning Strikes ---
-
-async function fetchLightningStrikes(lat, lon) {
-  // LightningStrikes public API:
-  // https://lightningstrikes.io/api/
-  // We get last 50 strikes near lat/lon in 1 degree radius (approx 69 miles) and filter
-
-  const radiusDeg = 1; // ~69 miles, bigger than 10 miles, filter later
-
-  const url = `https://api.lightningstrikes.io/v1/lightning?lat=${lat}&lon=${lon}&radius=${radiusDeg}&limit=50`;
-
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`API error ${response.status}`);
+    function toRad(d){return d*Math.PI/180;}
+    function distMiles(lat1,lon1,lat2,lon2){
+      const R=3958.8, dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1),
+            a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+      return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
-    const data = await response.json();
-    return data.lightning || [];
-  } catch (e) {
-    errorEl.textContent = "Error fetching lightning data: " + e.message;
-    console.error(e);
-    return [];
-  }
-}
 
-async function checkLightning() {
-  if (userLat === null || userLon === null) {
-    errorEl.textContent = "Waiting for location...";
-    return;
-  }
-
-  const strikes = await fetchLightningStrikes(userLat, userLon);
-
-  // Filter strikes within radiusMiles
-  const closeStrikes = strikes.filter(strike => {
-    const dist = distanceMiles(userLat, userLon, strike.lat, strike.lon);
-    return dist <= radiusMiles;
-  });
-
-  if (closeStrikes.length > 0) {
-    // Lightning detected nearby → reset timer
-    if (!lightningActive || timerSeconds <= 0) {
-      timerSeconds = countdownStartSeconds;
-      lightningActive = true;
-      errorEl.textContent = "";
-      updateTimerDisplay();
-      console.log(`Lightning detected! Reset timer.`);
+    function updateTimer(){
+      let m=Math.floor(timerSec/60), s=timerSec%60;
+      timerEl.textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+      if(lightningActive && timerSec>0){
+        statusEl.textContent="Sorry, we are on lightning"; statusEl.className="on";
+      } else {
+        statusEl.textContent="Lightning tracker and countdown"; statusEl.className="off";
+      }
     }
-  } else {
-    // No strikes nearby, let timer run down naturally
-    errorEl.textContent = "";
-  }
-}
 
-// --- Initialize App ---
+    async function checkLightning(){
+      const url = `https://data.api.xweather.com/lightning/search?client_id=${clientId}&client_secret=${clientSecret}&lat=${userLat}&lon=${userLon}&radius=${radiusKm}&limit=1000`;
+      try {
+        const res = await fetch(url);
+        if(!res.ok) throw new Error(res.status);
+        const data = await res.json();
+        strikesLayer.clearLayers();
+        let found=false;
+        (data.lightning||[]).forEach(s=>{
+          if(s.loc){
+            const lat=s.loc.lat, lon=s.loc.long;
+            L.circleMarker([lat,lon],{radius:6, color:'yellow'}).addTo(strikesLayer);
+            if(distMiles(userLat,userLon,lat,lon)<=radiusMiles) found=true;
+          }
+        });
+        if(found && (!lightningActive || timerSec<=0)){
+          timerSec=1800; lightningActive=true;
+        }
+      } catch(e){ console.error("API error",e); }
+    }
 
-function startApp() {
-  if (!navigator.geolocation) {
-    errorEl.textContent = "Geolocation is not supported by your browser.";
-    return;
-  }
+    function start(){
+      if(!navigator.geolocation){ alert("No geolocation"); return;}
+      navigator.geolocation.getCurrentPosition(pos=>{
+        userLat=pos.coords.latitude; userLon=pos.coords.longitude;
+        map.setView([userLat,userLon],12);
+        userMarker.setLatLng([userLat,userLon]);
+        radiusCircle.setLatLng([userLat,userLon]);
+        updateTimer();
+        setInterval(()=>{ if(timerSec>0) timerSec--; else lightningActive=false; updateTimer(); },1000);
+        checkLightning(); setInterval(()=>{ checkLightning(); },60000);
+      }, ()=>alert("Cannot fetch location"));
+    }
 
-  navigator.geolocation.getCurrentPosition(pos => {
-    userLat = pos.coords.latitude;
-    userLon = pos.coords.longitude;
-    errorEl.textContent = "";
-
-    updateTimerDisplay();
-    countdownInterval = setInterval(countdown, 1000);
-    checkLightning();
-
-    // Check lightning every 60 seconds
-    checkInterval = setInterval(() => {
-      navigator.geolocation.getCurrentPosition(pos => {
-        userLat = pos.coords.latitude;
-        userLon = pos.coords.longitude;
-        checkLightning();
-      }, e => {
-        errorEl.textContent = "Unable to retrieve location during update.";
-      });
-    }, 60000);
-
-  }, err => {
-    errorEl.textContent = "Unable to retrieve your location.";
-  });
-}
-
-startApp();
-</script>
+    start();
+  </script>
 </body>
 </html>
+
