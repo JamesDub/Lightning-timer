@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lightning Countdown Timer</title>
+<style>
+  body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #111;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+    user-select: none;
+  }
+  #timer {
+    font-size: 12vw;
+    font-weight: 900;
+  }
+  #status {
+    margin-top: 1rem;
+    font-size: 5vw;
+    color: #f44336; /* red */
+    transition: color 0.3s;
+  }
+  #status.off {
+    color: #4caf50; /* green */
+  }
+  #error {
+    margin-top: 1rem;
+    color: #ff5722;
+    font-size: 4vw;
+  }
+</style>
+</head>
+<body>
+  <div id="timer">30:00</div>
+  <div id="status" class="off">Lightning tracker and countdown</div>
+  <div id="error"></div>
+
+<script>
+// --- Helper functions ---
+
+// Convert degrees to radians
+function toRadians(deg) {
+  return deg * Math.PI / 180;
+}
+
+// Calculate distance between two points in miles using Haversine formula
+function distanceMiles(lat1, lon1, lat2, lon2) {
+  const R = 3958.8; // Earth radius in miles
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a = Math.sin(dLat/2) ** 2 +
+            Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
+            Math.sin(dLon/2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+// --- Variables ---
+const radiusMiles = 10;
+const countdownStartSeconds = 30 * 60; // 30 minutes
+let timerSeconds = countdownStartSeconds;
+let lightningActive = false;
+let countdownInterval;
+let checkInterval;
+let userLat = null;
+let userLon = null;
+
+const timerEl = document.getElementById('timer');
+const statusEl = document.getElementById('status');
+const errorEl = document.getElementById('error');
+
+// --- Update Timer Display ---
+function updateTimerDisplay() {
+  let m = Math.floor(timerSeconds / 60);
+  let s = timerSeconds % 60;
+  timerEl.textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+
+  if (lightningActive && timerSeconds > 0) {
+    statusEl.textContent = "Sorry, we are on lightning";
+    statusEl.classList.remove('off');
+  } else {
+    statusEl.textContent = "Lightning tracker and countdown";
+    statusEl.classList.add('off');
+  }
+}
+
+// --- Countdown Timer ---
+function countdown() {
+  if (timerSeconds > 0) {
+    timerSeconds--;
+  } else {
+    lightningActive = false;
+  }
+  updateTimerDisplay();
+}
+
+// --- Check Lightning Strikes ---
+
+async function fetchLightningStrikes(lat, lon) {
+  // LightningStrikes public API:
+  // https://lightningstrikes.io/api/
+  // We get last 50 strikes near lat/lon in 1 degree radius (approx 69 miles) and filter
+
+  const radiusDeg = 1; // ~69 miles, bigger than 10 miles, filter later
+
+  const url = `https://api.lightningstrikes.io/v1/lightning?lat=${lat}&lon=${lon}&radius=${radiusDeg}&limit=50`;
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`API error ${response.status}`);
+    }
+    const data = await response.json();
+    return data.lightning || [];
+  } catch (e) {
+    errorEl.textContent = "Error fetching lightning data: " + e.message;
+    console.error(e);
+    return [];
+  }
+}
+
+async function checkLightning() {
+  if (userLat === null || userLon === null) {
+    errorEl.textContent = "Waiting for location...";
+    return;
+  }
+
+  const strikes = await fetchLightningStrikes(userLat, userLon);
+
+  // Filter strikes within radiusMiles
+  const closeStrikes = strikes.filter(strike => {
+    const dist = distanceMiles(userLat, userLon, strike.lat, strike.lon);
+    return dist <= radiusMiles;
+  });
+
+  if (closeStrikes.length > 0) {
+    // Lightning detected nearby → reset timer
+    if (!lightningActive || timerSeconds <= 0) {
+      timerSeconds = countdownStartSeconds;
+      lightningActive = true;
+      errorEl.textContent = "";
+      updateTimerDisplay();
+      console.log(`Lightning detected! Reset timer.`);
+    }
+  } else {
+    // No strikes nearby, let timer run down naturally
+    errorEl.textContent = "";
+  }
+}
+
+// --- Initialize App ---
+
+function startApp() {
+  if (!navigator.geolocation) {
+    errorEl.textContent = "Geolocation is not supported by your browser.";
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(pos => {
+    userLat = pos.coords.latitude;
+    userLon = pos.coords.longitude;
+    errorEl.textContent = "";
+
+    updateTimerDisplay();
+    countdownInterval = setInterval(countdown, 1000);
+    checkLightning();
+
+    // Check lightning every 60 seconds
+    checkInterval = setInterval(() => {
+      navigator.geolocation.getCurrentPosition(pos => {
+        userLat = pos.coords.latitude;
+        userLon = pos.coords.longitude;
+        checkLightning();
+      }, e => {
+        errorEl.textContent = "Unable to retrieve location during update.";
+      });
+    }, 60000);
+
+  }, err => {
+    errorEl.textContent = "Unable to retrieve your location.";
+  });
+}
+
+startApp();
+</script>
+</body>
+</html>
