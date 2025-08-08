@@ -2,16 +2,37 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Lightning Timer</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
-    body { margin: 0; background: #111; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
-    #map { height: 40vh; width: 100%; }
-    #timer { font-size: 8vw; margin-top: 0.5em; }
-    #status { font-size: 4vw; margin-bottom: 1em; }
-    .on { color: red; }
-    .off { color: lightgreen; }
+    body {
+      margin: 0;
+      background: #111;
+      color: #fff;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #map {
+      height: 40vh;
+      width: 100%;
+    }
+    #timer {
+      font-size: 8vw;
+      margin-top: 0.5em;
+    }
+    #status {
+      font-size: 4vw;
+      margin-bottom: 1em;
+    }
+    .on {
+      color: red;
+    }
+    .off {
+      color: lightgreen;
+    }
   </style>
 </head>
 <body>
@@ -27,7 +48,7 @@
     let radiusKm = radiusMiles * 1.60934;
     const timerEl = document.getElementById('timer');
     const statusEl = document.getElementById('status');
-    let userLat = 0, userLon = 0;
+    let userLat = null, userLon = null;
 
     const map = L.map('map').setView([0, 0], 6);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
@@ -50,7 +71,7 @@
       let s = Math.floor(secondsLeft % 60);
       timerEl.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
       if (secondsLeft > 0) {
-        statusEl.textContent = "\u26A1 Sorry, we are on lightning";
+        statusEl.textContent = "⚡ Sorry, we are on lightning";
         statusEl.className = "on";
       } else {
         statusEl.textContent = "Lightning tracker and countdown";
@@ -58,13 +79,30 @@
       }
     }
 
+    function clearStrikesLayer() {
+      strikesLayer.clearLayers();
+    }
+
+    function drawStrikesOnMap(strikes) {
+      strikes.forEach(s => {
+        L.circleMarker([s.lat, s.lon], {
+          radius: 4,
+          color: 'yellow',
+          fillColor: 'yellow',
+          fillOpacity: 0.8
+        }).addTo(strikesLayer);
+      });
+    }
+
     function checkTimer() {
       const strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
       const now = Date.now();
+      // Filter strikes in last 30 mins within radius
       const recentStrikes = strikes.filter(s => now - s.time <= 1800000);
       if (recentStrikes.length > 0) {
-        const last = new Date(Math.max(...recentStrikes.map(s => s.time)));
-        const elapsed = (Date.now() - last.getTime()) / 1000;
+        // Find most recent strike inside radius
+        const lastStrikeTime = new Date(Math.max(...recentStrikes.map(s => s.time)));
+        const elapsed = (Date.now() - lastStrikeTime.getTime()) / 1000;
         const remaining = Math.max(0, 1800 - elapsed);
         updateTimerDisplay(remaining);
       } else {
@@ -74,60 +112,94 @@
       }
     }
 
-    // Blitzortung WebSocket
-    const ws = new WebSocket('wss://ws.lightning.deno.dev');
-    ws.onmessage = (msg) => {
-      try {
-        const data = JSON.parse(msg.data);
-        let strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
-        const now = Date.now();
+    function loadStoredStrikes() {
+      const strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
+      const now = Date.now();
+      // Remove expired strikes
+      const validStrikes = strikes.filter(s => now - s.time <= 1800000);
+      localStorage.setItem(STRIKES_LIST_KEY, JSON.stringify(validStrikes));
+      return validStrikes;
+    }
 
-        data.forEach(strike => {
-          if (strike.lat && strike.lon) {
-            const d = haversine(userLat, userLon, strike.lat, strike.lon);
-            if (d <= radiusKm) {
-              const timestamp = Date.now();
-              strikes.push({ lat: strike.lat, lon: strike.lon, time: timestamp });
-              L.circleMarker([strike.lat, strike.lon], {
-                radius: 4,
-                color: 'yellow',
-                fillColor: 'yellow',
-                fillOpacity: 0.8
-              }).addTo(strikesLayer);
-            }
-          }
-        });
-
-        // Keep only the last 30 minutes of strikes
-        strikes = strikes.filter(s => now - s.time <= 1800000);
-        localStorage.setItem(STRIKES_LIST_KEY, JSON.stringify(strikes));
-
-      } catch (e) {
-        console.warn("Bad data", e);
+    // Initialize map & user location, then setup WebSocket
+    function init() {
+      if (!navigator.geolocation) {
+        alert("Geolocation is required for this app.");
+        return;
       }
-    };
-
-    // Live countdown
-    setInterval(() => checkTimer(), 1000);
-
-    // Geolocation
-    if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(pos => {
         userLat = pos.coords.latitude;
         userLon = pos.coords.longitude;
+
         marker.setLatLng([userLat, userLon]);
         circle.setLatLng([userLat, userLon]);
         map.setView([userLat, userLon], 10);
 
-        // Custom radius prompt
+        // Prompt user for radius
         const userRadius = prompt("Enter radius in miles (default is 10):", "10");
         if (userRadius && !isNaN(userRadius)) {
           radiusMiles = parseFloat(userRadius);
           radiusKm = radiusMiles * 1.60934;
           circle.setRadius(radiusKm * 1000);
         }
+
+        // Load and display stored strikes
+        const storedStrikes = loadStoredStrikes();
+        clearStrikesLayer();
+        drawStrikesOnMap(storedStrikes);
+
+        setupWebSocket();
+      }, err => {
+        alert("Failed to get location: " + err.message);
       });
     }
+
+    function setupWebSocket() {
+      const ws = new WebSocket('wss://ws.lightning.deno.dev');
+
+      ws.onmessage = (msg) => {
+        try {
+          const data = JSON.parse(msg.data);
+          let strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
+          const now = Date.now();
+
+          data.forEach(strike => {
+            if (strike.lat && strike.lon) {
+              const d = haversine(userLat, userLon, strike.lat, strike.lon);
+              if (d <= radiusKm) {
+                const timestamp = Date.now();
+                strikes.push({ lat: strike.lat, lon: strike.lon, time: timestamp });
+              }
+            }
+          });
+
+          // Keep only strikes within last 30 minutes
+          strikes = strikes.filter(s => now - s.time <= 1800000);
+
+          localStorage.setItem(STRIKES_LIST_KEY, JSON.stringify(strikes));
+
+          // Refresh map
+          clearStrikesLayer();
+          drawStrikesOnMap(strikes);
+
+        } catch (e) {
+          console.warn("Bad data", e);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error("WebSocket error", err);
+      };
+
+      ws.onclose = () => {
+        console.warn("WebSocket closed, attempting reconnect in 5 seconds...");
+        setTimeout(setupWebSocket, 5000);
+      };
+    }
+
+    setInterval(() => checkTimer(), 1000);
+
+    window.onload = init;
   </script>
 </body>
 </html>
