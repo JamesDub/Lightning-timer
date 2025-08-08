@@ -2,88 +2,106 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lightning Timer + Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lightning Timer</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
-    body { margin:0; font-family:sans-serif; background:#222; color:#fff; }
-    #map { height: 40vh; }
-    #timer { font-size: 8vw; text-align: center; margin: 0.5em 0; }
-    #status { font-size: 4vw; text-align: center; margin-bottom: 1em; }
-    .off { color: #4caf50; }
-    .on { color: #f44336; }
+    body { margin: 0; background: #111; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+    #map { height: 40vh; width: 100%; }
+    #timer { font-size: 8vw; margin-top: 0.5em; }
+    #status { font-size: 4vw; margin-bottom: 1em; }
+    .on { color: red; }
+    .off { color: lightgreen; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div id="timer">30:00</div>
-  <div id="status" class="off">Lightning tracker and countdown</div>
+  <div id="timer">--:--</div>
+  <div id="status" class="off">Waiting for lightning...</div>
+
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
-    const clientId="YOUR_XWEATHER_CLIENT_ID", clientSecret="YOUR_XWEATHER_CLIENT_SECRET";
-    const radiusMiles=10, radiusKm=radiusMiles*1.60934;
-    let userLat,userLon, timerSec=1800, lightningActive=false;
-    const timerEl=document.getElementById("timer"), statusEl=document.getElementById("status");
-    const map=L.map('map').setView([0,0],13);
+    const LAST_STRIKE_KEY = "last_strike_utc";
+    const radiusMiles = 10;
+    const radiusKm = radiusMiles * 1.60934;
+    const timerEl = document.getElementById('timer');
+    const statusEl = document.getElementById('status');
+    let userLat = 0, userLon = 0;
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);
-    const userMarker=L.marker([0,0]).addTo(map);
-    const radiusCircle=L.circle([0,0],{radius:radiusKm*1000, color:'lightblue'}).addTo(map);
-    const strikesLayer=L.layerGroup().addTo(map);
+    const map = L.map('map').setView([0, 0], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    const marker = L.marker([0, 0]).addTo(map);
+    const circle = L.circle([0, 0], { radius: radiusKm * 1000, color: 'cyan' }).addTo(map);
+    const strikesLayer = L.layerGroup().addTo(map);
 
-    function toRad(d){return d*Math.PI/180;}
-    function distMiles(lat1,lon1,lat2,lon2){
-      const R=3958.8, dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1),
-            a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
-      return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    function haversine(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
-    function updateTimer(){
-      let m=Math.floor(timerSec/60), s=timerSec%60;
-      timerEl.textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
-      if(lightningActive && timerSec>0){
-        statusEl.textContent="Sorry, we are on lightning"; statusEl.className="on";
+    function updateTimerDisplay(secondsLeft) {
+      let m = Math.floor(secondsLeft / 60);
+      let s = Math.floor(secondsLeft % 60);
+      timerEl.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+      if (secondsLeft > 0) {
+        statusEl.textContent = "\u26A1 Sorry, we are on lightning";
+        statusEl.className = "on";
       } else {
-        statusEl.textContent="Lightning tracker and countdown"; statusEl.className="off";
+        statusEl.textContent = "Lightning tracker and countdown";
+        statusEl.className = "off";
       }
     }
 
-    async function checkLightning(){
-      const url = `https://data.api.xweather.com/lightning/search?client_id=${clientId}&client_secret=${clientSecret}&lat=${userLat}&lon=${userLon}&radius=${radiusKm}&limit=1000`;
+    function checkTimer() {
+      const last = localStorage.getItem(LAST_STRIKE_KEY);
+      if (last) {
+        const elapsed = (Date.now() - new Date(last).getTime()) / 1000;
+        const remaining = Math.max(0, 1800 - elapsed);
+        updateTimerDisplay(remaining);
+      } else {
+        timerEl.textContent = "--:--";
+        statusEl.textContent = "Waiting for lightning...";
+        statusEl.className = "off";
+      }
+    }
+
+    // Blitzortung WebSocket
+    const ws = new WebSocket('wss://ws.lightning.deno.dev');
+    ws.onmessage = (msg) => {
       try {
-        const res = await fetch(url);
-        if(!res.ok) throw new Error(res.status);
-        const data = await res.json();
-        strikesLayer.clearLayers();
-        let found=false;
-        (data.lightning||[]).forEach(s=>{
-          if(s.loc){
-            const lat=s.loc.lat, lon=s.loc.long;
-            L.circleMarker([lat,lon],{radius:6, color:'yellow'}).addTo(strikesLayer);
-            if(distMiles(userLat,userLon,lat,lon)<=radiusMiles) found=true;
+        const data = JSON.parse(msg.data);
+        data.forEach(strike => {
+          if (strike.lat && strike.lon) {
+            const d = haversine(userLat, userLon, strike.lat, strike.lon);
+            if (d <= radiusKm) {
+              localStorage.setItem(LAST_STRIKE_KEY, new Date().toISOString());
+            }
+            L.circleMarker([strike.lat, strike.lon], { radius: 5, color: 'yellow' }).addTo(strikesLayer);
           }
         });
-        if(found && (!lightningActive || timerSec<=0)){
-          timerSec=1800; lightningActive=true;
-        }
-      } catch(e){ console.error("API error",e); }
-    }
+      } catch (e) {
+        console.warn("Bad data", e);
+      }
+    };
 
-    function start(){
-      if(!navigator.geolocation){ alert("No geolocation"); return;}
-      navigator.geolocation.getCurrentPosition(pos=>{
-        userLat=pos.coords.latitude; userLon=pos.coords.longitude;
-        map.setView([userLat,userLon],12);
-        userMarker.setLatLng([userLat,userLon]);
-        radiusCircle.setLatLng([userLat,userLon]);
-        updateTimer();
-        setInterval(()=>{ if(timerSec>0) timerSec--; else lightningActive=false; updateTimer(); },1000);
-        checkLightning(); setInterval(()=>{ checkLightning(); },60000);
-      }, ()=>alert("Cannot fetch location"));
-    }
+    // Live countdown
+    setInterval(() => checkTimer(), 1000);
 
-    start();
+    // Geolocation
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(pos => {
+        userLat = pos.coords.latitude;
+        userLon = pos.coords.longitude;
+        marker.setLatLng([userLat, userLon]);
+        circle.setLatLng([userLat, userLon]);
+        map.setView([userLat, userLon], 10);
+      });
+    }
   </script>
 </body>
 </html>
-
