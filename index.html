@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lightning Timer</title>
+  <title>Lightning Timer - LightningMaps.org Data</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
     body {
@@ -42,7 +42,6 @@
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
-    const LAST_STRIKE_KEY = "last_strike_utc";
     const STRIKES_LIST_KEY = "strikes_list";
     let radiusMiles = 10;
     let radiusKm = radiusMiles * 1.60934;
@@ -52,12 +51,12 @@
 
     const map = L.map('map').setView([0, 0], 6);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-    const marker = L.marker([0, 0]).addTo(map);
+    const userMarker = L.marker([0, 0]).addTo(map);
     let circle = L.circle([0, 0], { radius: radiusKm * 1000, color: 'cyan' }).addTo(map);
     const strikesLayer = L.layerGroup().addTo(map);
 
     function haversine(lat1, lon1, lat2, lon2) {
-      const R = 6371;
+      const R = 6371; // km
       const dLat = (lat2 - lat1) * Math.PI / 180;
       const dLon = (lon2 - lon1) * Math.PI / 180;
       const a = Math.sin(dLat / 2) ** 2 +
@@ -94,24 +93,6 @@
       });
     }
 
-    function checkTimer() {
-      const strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
-      const now = Date.now();
-      const recentStrikes = strikes.filter(s => now - s.time <= 1800000);
-      if (recentStrikes.length > 0) {
-        const lastStrikeTime = new Date(Math.max(...recentStrikes.map(s => s.time)));
-        const elapsed = (now - lastStrikeTime.getTime()) / 1000;
-        const remaining = Math.max(0, 1800 - elapsed);
-        console.log(`Timer updated: ${remaining} seconds left`);
-        updateTimerDisplay(remaining);
-      } else {
-        timerEl.textContent = "--:--";
-        statusEl.textContent = "Waiting for lightning...";
-        statusEl.className = "off";
-        console.log("No recent strikes. Timer stopped.");
-      }
-    }
-
     function loadStoredStrikes() {
       const strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
       const now = Date.now();
@@ -120,52 +101,72 @@
       return validStrikes;
     }
 
-    function setupWebSocket() {
-      const ws = new WebSocket('wss://ws.lightning.deno.dev');
-      console.log("WebSocket connecting...");
+    // Fetch lightning strikes from LightningMaps Blitzortung last_30.json feed
+    async function fetchLightningStrikes() {
+      try {
+        // LightningMaps last_30.json URL
+        const url = "https://www.lightningmaps.org/blitzortung/data/last_30.json";
 
-      ws.onopen = () => {
-        console.log("WebSocket connected");
-      };
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
 
-      ws.onmessage = (msg) => {
-        try {
-          const data = JSON.parse(msg.data);
-          let strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
-          const now = Date.now();
+        const data = await res.json();
 
-          data.forEach(strike => {
-            if (strike.lat && strike.lon) {
-              console.log(`Strike received at lat:${strike.lat}, lon:${strike.lon}`);
-              const d = haversine(userLat, userLon, strike.lat, strike.lon);
-              console.log(`Distance from user: ${d.toFixed(2)} km`);
+        // Data format: { "flashes": [ [lon, lat, timestamp, ...], ... ] }
+        const flashes = data.flashes || [];
 
-              if (d <= radiusKm) {
-                console.log("Strike is within radius! Adding strike and resetting timer.");
-                strikes.push({ lat: strike.lat, lon: strike.lon, time: now });
+        const now = Date.now();
+        let strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
+
+        flashes.forEach(flash => {
+          const lon = flash[0];
+          const lat = flash[1];
+          const timeSec = flash[2]; // timestamp in seconds
+          const timeMs = timeSec * 1000;
+
+          // Check if strike is recent (< 30 mins) and inside radius
+          if (now - timeMs <= 1800000) {
+            if (userLat !== null && userLon !== null) {
+              const distKm = haversine(userLat, userLon, lat, lon);
+              if (distKm <= radiusKm) {
+                // Check if this strike already exists (avoid duplicates)
+                if (!strikes.some(s => s.lat === lat && s.lon === lon && s.time === timeMs)) {
+                  strikes.push({ lat, lon, time: timeMs });
+                  console.log(`New strike at ${lat},${lon} within radius (${distKm.toFixed(2)} km)`);
+                }
               }
             }
-          });
+          }
+        });
 
-          strikes = strikes.filter(s => now - s.time <= 1800000);
+        // Remove old strikes (> 30 mins)
+        strikes = strikes.filter(s => now - s.time <= 1800000);
 
-          localStorage.setItem(STRIKES_LIST_KEY, JSON.stringify(strikes));
-          clearStrikesLayer();
-          drawStrikesOnMap(strikes);
+        localStorage.setItem(STRIKES_LIST_KEY, JSON.stringify(strikes));
 
-        } catch (e) {
-          console.warn("Bad data", e);
-        }
-      };
+        clearStrikesLayer();
+        drawStrikesOnMap(strikes);
 
-      ws.onerror = (err) => {
-        console.error("WebSocket error", err);
-      };
+      } catch (e) {
+        console.error("Error fetching lightning strikes:", e);
+      }
+    }
 
-      ws.onclose = () => {
-        console.warn("WebSocket closed, attempting reconnect in 5 seconds...");
-        setTimeout(setupWebSocket, 5000);
-      };
+    function checkTimer() {
+      const strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
+      const now = Date.now();
+      const recentStrikes = strikes.filter(s => now - s.time <= 1800000);
+
+      if (recentStrikes.length > 0) {
+        const lastStrikeTime = new Date(Math.max(...recentStrikes.map(s => s.time)));
+        const elapsed = (now - lastStrikeTime.getTime()) / 1000;
+        const remaining = Math.max(0, 1800 - elapsed);
+        updateTimerDisplay(remaining);
+      } else {
+        timerEl.textContent = "--:--";
+        statusEl.textContent = "Waiting for lightning...";
+        statusEl.className = "off";
+      }
     }
 
     function init() {
@@ -173,11 +174,12 @@
         alert("Geolocation is required for this app.");
         return;
       }
+
       navigator.geolocation.getCurrentPosition(pos => {
         userLat = pos.coords.latitude;
         userLon = pos.coords.longitude;
 
-        marker.setLatLng([userLat, userLon]);
+        userMarker.setLatLng([userLat, userLon]);
         circle.setLatLng([userLat, userLon]);
         map.setView([userLat, userLon], 10);
 
@@ -188,19 +190,20 @@
           circle.setRadius(radiusKm * 1000);
         }
 
-        const storedStrikes = loadStoredStrikes();
-        clearStrikesLayer();
-        drawStrikesOnMap(storedStrikes);
+        // Initial fetch
+        fetchLightningStrikes();
 
-        setupWebSocket();
+        // Poll every 20 seconds
+        setInterval(fetchLightningStrikes, 20000);
+
+        // Update timer every second
+        setInterval(checkTimer, 1000);
       }, err => {
         alert("Failed to get location: " + err.message);
       });
     }
 
-    setInterval(() => checkTimer(), 1000);
     window.onload = init;
   </script>
 </body>
 </html>
-
