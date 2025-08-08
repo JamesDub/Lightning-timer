@@ -22,6 +22,7 @@
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
     const LAST_STRIKE_KEY = "last_strike_utc";
+    const STRIKES_LIST_KEY = "strikes_list";
     let radiusMiles = 10;
     let radiusKm = radiusMiles * 1.60934;
     const timerEl = document.getElementById('timer');
@@ -58,9 +59,12 @@
     }
 
     function checkTimer() {
-      const last = localStorage.getItem(LAST_STRIKE_KEY);
-      if (last) {
-        const elapsed = (Date.now() - new Date(last).getTime()) / 1000;
+      const strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
+      const now = Date.now();
+      const recentStrikes = strikes.filter(s => now - s.time <= 1800000);
+      if (recentStrikes.length > 0) {
+        const last = new Date(Math.max(...recentStrikes.map(s => s.time)));
+        const elapsed = (Date.now() - last.getTime()) / 1000;
         const remaining = Math.max(0, 1800 - elapsed);
         updateTimerDisplay(remaining);
       } else {
@@ -75,20 +79,29 @@
     ws.onmessage = (msg) => {
       try {
         const data = JSON.parse(msg.data);
+        let strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
+        const now = Date.now();
+
         data.forEach(strike => {
           if (strike.lat && strike.lon) {
             const d = haversine(userLat, userLon, strike.lat, strike.lon);
             if (d <= radiusKm) {
-              localStorage.setItem(LAST_STRIKE_KEY, new Date().toISOString());
+              const timestamp = Date.now();
+              strikes.push({ lat: strike.lat, lon: strike.lon, time: timestamp });
+              L.circleMarker([strike.lat, strike.lon], {
+                radius: 4,
+                color: 'yellow',
+                fillColor: 'yellow',
+                fillOpacity: 0.8
+              }).addTo(strikesLayer);
             }
-            L.circleMarker([strike.lat, strike.lon], {
-              radius: 4,
-              color: 'yellow',
-              fillColor: 'yellow',
-              fillOpacity: 0.8
-            }).addTo(strikesLayer);
           }
         });
+
+        // Keep only the last 30 minutes of strikes
+        strikes = strikes.filter(s => now - s.time <= 1800000);
+        localStorage.setItem(STRIKES_LIST_KEY, JSON.stringify(strikes));
+
       } catch (e) {
         console.warn("Bad data", e);
       }
@@ -118,8 +131,3 @@
   </script>
 </body>
 </html>
-
-  </script>
-</body>
-</html>
-
