@@ -105,7 +105,7 @@
     async function fetchLightningStrikes() {
       try {
         // LightningMaps last_30.json URL
-        const url = "https://www.lightningmaps.org/blitzortung/data/last_30.json";
+        const url = "https://cors-anywhere.herokuapp.com/https://www.lightningmaps.org/blitzortung/data/last_30.json";
 
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
@@ -161,8 +161,10 @@
         const lastStrikeTime = new Date(Math.max(...recentStrikes.map(s => s.time)));
         const elapsed = (now - lastStrikeTime.getTime()) / 1000;
         const remaining = Math.max(0, 1800 - elapsed);
+        console.log(`Timer: ${remaining.toFixed(0)} seconds left`);
         updateTimerDisplay(remaining);
       } else {
+        console.log("No recent strikes. Timer stopped.");
         timerEl.textContent = "--:--";
         statusEl.textContent = "Waiting for lightning...";
         statusEl.className = "off";
@@ -207,3 +209,4 @@
   </script>
 </body>
 </html>
+
