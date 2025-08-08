@@ -22,8 +22,8 @@
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
     const LAST_STRIKE_KEY = "last_strike_utc";
-    const radiusMiles = 10;
-    const radiusKm = radiusMiles * 1.60934;
+    let radiusMiles = 10;
+    let radiusKm = radiusMiles * 1.60934;
     const timerEl = document.getElementById('timer');
     const statusEl = document.getElementById('status');
     let userLat = 0, userLon = 0;
@@ -31,7 +31,7 @@
     const map = L.map('map').setView([0, 0], 6);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
     const marker = L.marker([0, 0]).addTo(map);
-    const circle = L.circle([0, 0], { radius: radiusKm * 1000, color: 'cyan' }).addTo(map);
+    let circle = L.circle([0, 0], { radius: radiusKm * 1000, color: 'cyan' }).addTo(map);
     const strikesLayer = L.layerGroup().addTo(map);
 
     function haversine(lat1, lon1, lat2, lon2) {
@@ -81,7 +81,12 @@
             if (d <= radiusKm) {
               localStorage.setItem(LAST_STRIKE_KEY, new Date().toISOString());
             }
-            L.circleMarker([strike.lat, strike.lon], { radius: 5, color: 'yellow' }).addTo(strikesLayer);
+            L.circleMarker([strike.lat, strike.lon], {
+              radius: 4,
+              color: 'yellow',
+              fillColor: 'yellow',
+              fillOpacity: 0.8
+            }).addTo(strikesLayer);
           }
         });
       } catch (e) {
@@ -100,8 +105,21 @@
         marker.setLatLng([userLat, userLon]);
         circle.setLatLng([userLat, userLon]);
         map.setView([userLat, userLon], 10);
+
+        // Custom radius prompt
+        const userRadius = prompt("Enter radius in miles (default is 10):", "10");
+        if (userRadius && !isNaN(userRadius)) {
+          radiusMiles = parseFloat(userRadius);
+          radiusKm = radiusMiles * 1.60934;
+          circle.setRadius(radiusKm * 1000);
+        }
       });
     }
   </script>
 </body>
 </html>
+
+  </script>
+</body>
+</html>
+
