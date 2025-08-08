@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lightning Timer - LightningMaps.org Data</title>
+  <title>Lightning Timer - lightningstrik.es Data</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
     body {
@@ -14,6 +14,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
+      height: 100vh;
     }
     #map {
       height: 40vh;
@@ -55,6 +56,7 @@
     let circle = L.circle([0, 0], { radius: radiusKm * 1000, color: 'cyan' }).addTo(map);
     const strikesLayer = L.layerGroup().addTo(map);
 
+    // Haversine formula for distance in km between two lat/lon points
     function haversine(lat1, lon1, lat2, lon2) {
       const R = 6371; // km
       const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -85,7 +87,7 @@
     function drawStrikesOnMap(strikes) {
       strikes.forEach(s => {
         L.circleMarker([s.lat, s.lon], {
-          radius: 4,
+          radius: 5,
           color: 'yellow',
           fillColor: 'yellow',
           fillOpacity: 0.8
@@ -101,35 +103,32 @@
       return validStrikes;
     }
 
-    // Fetch lightning strikes from LightningMaps Blitzortung last_30.json feed
     async function fetchLightningStrikes() {
       try {
-        // LightningMaps last_30.json URL
-        const url = "https://cors-anywhere.herokuapp.com/https://www.lightningmaps.org/blitzortung/data/last_30.json";
+        const url = "https://api.lightningstrikes.live/v1/data";
 
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
 
         const data = await res.json();
 
-        // Data format: { "flashes": [ [lon, lat, timestamp, ...], ... ] }
-        const flashes = data.flashes || [];
+        // data.features is an array of GeoJSON lightning strikes
+        const flashes = data.features || [];
 
         const now = Date.now();
         let strikes = JSON.parse(localStorage.getItem(STRIKES_LIST_KEY) || "[]");
 
         flashes.forEach(flash => {
-          const lon = flash[0];
-          const lat = flash[1];
-          const timeSec = flash[2]; // timestamp in seconds
-          const timeMs = timeSec * 1000;
+          const coords = flash.geometry.coordinates; // [lon, lat]
+          const lon = coords[0];
+          const lat = coords[1];
+          const timeMs = flash.properties.time; // timestamp in ms
 
-          // Check if strike is recent (< 30 mins) and inside radius
-          if (now - timeMs <= 1800000) {
+          if (now - timeMs <= 1800000) { // within last 30 mins
             if (userLat !== null && userLon !== null) {
               const distKm = haversine(userLat, userLon, lat, lon);
               if (distKm <= radiusKm) {
-                // Check if this strike already exists (avoid duplicates)
+                // Avoid duplicates
                 if (!strikes.some(s => s.lat === lat && s.lon === lon && s.time === timeMs)) {
                   strikes.push({ lat, lon, time: timeMs });
                   console.log(`New strike at ${lat},${lon} within radius (${distKm.toFixed(2)} km)`);
@@ -139,9 +138,8 @@
           }
         });
 
-        // Remove old strikes (> 30 mins)
+        // Remove old strikes
         strikes = strikes.filter(s => now - s.time <= 1800000);
-
         localStorage.setItem(STRIKES_LIST_KEY, JSON.stringify(strikes));
 
         clearStrikesLayer();
@@ -161,10 +159,8 @@
         const lastStrikeTime = new Date(Math.max(...recentStrikes.map(s => s.time)));
         const elapsed = (now - lastStrikeTime.getTime()) / 1000;
         const remaining = Math.max(0, 1800 - elapsed);
-        console.log(`Timer: ${remaining.toFixed(0)} seconds left`);
         updateTimerDisplay(remaining);
       } else {
-        console.log("No recent strikes. Timer stopped.");
         timerEl.textContent = "--:--";
         statusEl.textContent = "Waiting for lightning...";
         statusEl.className = "off";
@@ -209,4 +205,3 @@
   </script>
 </body>
 </html>
-
